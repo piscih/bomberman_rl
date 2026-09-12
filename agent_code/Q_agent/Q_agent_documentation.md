@@ -739,7 +739,9 @@ The agent therefore focuses on information useful for decision-making rather tha
 
  Tried building three agents by tuning the rewards
 
- - Agent : game_rewards = {
+ - Agent : 
+ ``` 
+ game_rewards = {
 
         e.COIN_COLLECTED: 100.0,
 
@@ -767,8 +769,10 @@ The agent therefore focuses on information useful for decision-making rather tha
 
         OSCILLATION_PENALTY: -20.0,
     }
+```
 
 - Agent stats : 
+```
 "Q_agent": {
             "bombs": 35165,
             "coins": 616,
@@ -781,9 +785,11 @@ The agent therefore focuses on information useful for decision-making rather tha
             "steps": 268158,
             "suicides": 350,
             "time": 32.98667073249817
-        },
+        }
+```
 
 - Agent 1 : 
+```
  game_rewards = {
 
         e.COIN_COLLECTED: 100.0,
@@ -812,9 +818,10 @@ The agent therefore focuses on information useful for decision-making rather tha
 
         OSCILLATION_PENALTY: -10.0,
     }
+```    
 
 - Agent1 stats :
-
+```
  "Q_agent": {
             "bombs": 36239,
             "coins": 533,
@@ -827,11 +834,12 @@ The agent therefore focuses on information useful for decision-making rather tha
             "steps": 270191,
             "suicides": 289,
             "time": 32.91277194023132
-        },
+        }
+```        
 
 
 - Agent2 : 
-
+```
   game_rewards = {
 
     e.COIN_COLLECTED: 150.0,
@@ -860,9 +868,9 @@ The agent therefore focuses on information useful for decision-making rather tha
 
     OSCILLATION_PENALTY: -10.0,
 }
-
+```
 - Agent2 stats :
-
+```
  "Q_agent": {
             "bombs": 34745,
             "coins": 680,
@@ -875,4 +883,5 @@ The agent therefore focuses on information useful for decision-making rather tha
             "steps": 268332,
             "suicides": 308,
             "time": 34.575828313827515
-        },
+        }
+```
