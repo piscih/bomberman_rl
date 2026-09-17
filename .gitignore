@@ -110,4 +110,6 @@ screenshots/*.mp4
 screenshots/*.webm
 
 replays/
-results/
+
+agent_code/dqn_agent/dqn_model.pt
+agent_code/dqn_agent/train_checkpoint.pt
