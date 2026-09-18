@@ -1,58 +1,111 @@
-import csv
+import collections
 import os
 import random
-from collections import deque
-
 import numpy as np
 import torch
-import torch.nn.functional as F
+import torch.nn as nn
 import torch.optim as optim
 
 from .callbacks import (
     ACTIONS,
     prepare_state,
 )
+
 from .dqn_model import DQNResNet
 
-
-REWARD_KILL = 50.0
-REWARD_COIN = 3.0
-REWARD_CRATE = 1.2
-REWARD_STEP = -0.05
-REWARD_DEATH = -80.0
-REWARD_BOMB_NEAR_CRATE = 0.5
-COIN_POTENTIAL_SCALE = 0.05
-REWARD_ESCAPE_DANGER = 0.30
-
-GAMMA = 0.99
-LEARNING_RATE = 1e-4
+# Hyperparameters
 BATCH_SIZE = 64
-BUFFER_SIZE = 50000
-TARGET_UPDATE_FREQ = 2000 
+GAMMA = 0.99
+LR = 1e-4
+MEMORY_SIZE = 100_000
+TARGET_UPDATE_FREQ = 2500
 
-EPS_START = 0.50
-EPS_END = 0.10
-EPS_DECAY_STEPS = 200000
+EPS_START = 0.5
+EPS_END = 0.05
+EPSILON_DECAY = 20_000
+
+# Reward Shaping
+REWARD_KILL = 50.0
+REWARD_COIN = 8.0
+REWARD_CRATE = 0.6
+REWARD_WAIT_PENALTY = -0.1
+REWARD_CLOSER_TO_OPPONENT = 0.0
+COIN_POTENTIAL_WEIGHT = 5.0
 
 
-LOG_INTERVAL = 100
-BEST_WINDOW = 100
-SAVE_INTERVAL = 100
+def _coin_potential(distance):
+    """Phi(s) = 1/(1+distance) -- higher when closer to the nearest coin.
+    0.0 when no coin exists or none is reachable (distance is None)."""
+    if distance is None:
+        return 0.0
+    return 1.0 / (1.0 + float(distance))
 
 
-FINAL_TRAINING_ROUNDS = 10000
+def get_current_epsilon(steps_done: int) -> float:
+    """Calculates linear decay epsilon based on total steps taken."""
+    decay_progress = min(1.0, steps_done / EPSILON_DECAY)
+    return EPS_END + (EPS_START - EPS_END) * (1.0 - decay_progress)
+
+
+STATE_SHAPE = (12, 17, 17)
+ACTION_DIM = 6
+
+
+class ReplayBuffer:
+    def __init__(self, capacity: int, state_shape=STATE_SHAPE, action_dim=ACTION_DIM):
+        self.capacity = capacity
+        self.states = np.zeros((capacity + 1,) + state_shape, dtype=np.float32)
+        self.actions = np.zeros(capacity, dtype=np.int64)
+        self.rewards = np.zeros(capacity, dtype=np.float32)
+        self.dones = np.zeros(capacity, dtype=np.float32)
+        self.next_masks = np.zeros((capacity, action_dim), dtype=np.float32)
+        self.pos = 0
+        self.size = 0
+
+    def push(self, state, action, reward, next_state, done, mask):
+        idx = self.pos
+
+        self.states[idx] = state
+        self.states[idx + 1] = next_state
+        self.actions[idx] = action
+        self.rewards[idx] = reward
+        self.dones[idx] = float(done)
+        self.next_masks[idx] = mask
+
+        self.pos = (self.pos + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
+
+    def sample(self, batch_size: int):
+        indices = np.random.randint(0, self.size, size=batch_size)
+        next_indices = indices + 1  # always in bounds: indices in [0, capacity-1]
+
+        return (
+            self.states[indices],
+            self.actions[indices],
+            self.rewards[indices],
+            self.states[next_indices],
+            self.dones[indices],
+            self.next_masks[indices],
+        )
+
+    def __len__(self):
+        return self.size
 
 
 def setup_training(self):
-
-    self.replay_buffer = deque(
-        maxlen=BUFFER_SIZE
-    )
-
+    self.replay_buffer = ReplayBuffer(MEMORY_SIZE)
     self.target_net = DQNResNet(
         input_channels=12,
         num_actions=6
     ).to(self.device)
+
+    self.optimizer = optim.Adam(
+        self.policy_net.parameters(),
+        lr=LR
+    )
+
+    self.steps_done = 0
+    self.epsilon = EPS_START
 
     self.target_net.load_state_dict(
         self.policy_net.state_dict()
@@ -60,603 +113,150 @@ def setup_training(self):
 
     self.target_net.eval()
 
-    self.optimizer = optim.Adam(
-        self.policy_net.parameters(),
-        lr=LEARNING_RATE
-    )
-
-    self.steps_done = 0
-    self.epsilon = EPS_START
-    self.training_round = 0
-
-    self.episode_reward = 0.0
-    self.episode_coins = 0
-    self.episode_kills = 0
-    self.episode_deaths = 0
-    self.episode_crates = 0
-    self.episode_invalid = 0
-    self.episode_steps = 0
-
-    self.recent_rewards = deque(
-        maxlen=BEST_WINDOW
-    )
-
-    self.recent_coins = deque(
-        maxlen=BEST_WINDOW
-    )
-
-    self.loss_history = deque(
-        maxlen=1000
-    )
-
-    self.cached_features = None
-    self.cached_mask = None
-    self.cached_danger = None
-    self.cached_coin_distance = None
-
-    self.log_path = os.path.join(
-        os.path.dirname(__file__),
-        "training_log.csv"
-    )
-
-    if not os.path.isfile(self.log_path):
-        with open(
-            self.log_path,
-            "w",
-            newline=""
-        ) as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                "round",
-                "steps",
-                "reward",
-                "avg_reward",
-                "coins",
-                "avg_coins",
-                "kills",
-                "deaths",
-                "crates",
-                "invalid",
-                "epsilon",
-                "loss"
-            ])
-
     self.logger.info(
-        "Training initialized from scratch. "
-        "No checkpoint restoration."
+        f"Fresh training initialized. "
+        f"Initial Epsilon = {self.epsilon:.4f}"
     )
 
 
-def episode_trigger(self):
-
-    self.cached_features = None
-    self.cached_mask = None
-    self.cached_danger = None
-    self.cached_coin_distance = None
-
-    self.episode_reward = 0.0
-    self.episode_coins = 0
-    self.episode_kills = 0
-    self.episode_deaths = 0
-    self.episode_crates = 0
-    self.episode_invalid = 0
-    self.episode_steps = 0
-
-def update_epsilon(self):
-
-    progress = min(
-        self.steps_done / EPS_DECAY_STEPS,
-        1.0
-    )
-
-    self.epsilon = (
-        EPS_START
-        - progress * (EPS_START - EPS_END)
-    )
-
-def calculate_reward(
-    self,
-    old_game_state,
-    new_game_state,
-    self_action,
-    events,
-    old_coin_distance=None,
-    new_coin_distance=None,
-    old_danger=None,
-    new_danger=None
-):
-
-    reward = REWARD_STEP
-
-    if "KILLED_OPPONENT" in events:
-        reward += REWARD_KILL
-        self.episode_kills += 1
-
-    if "COIN_COLLECTED" in events:
-        reward += REWARD_COIN
-        self.episode_coins += 1
-
-    if "CRATE_DESTROYED" in events:
-        reward += REWARD_CRATE
-        self.episode_crates += 1
-
-    if (
-        "KILLED_SELF" in events
-        or "GOT_KILLED" in events
-    ):
-        reward += REWARD_DEATH
-        self.episode_deaths += 1
-
-    if "INVALID_ACTION" in events:
-        self.episode_invalid += 1
-
-    if (
-        self_action == "BOMB"
-        and old_game_state is not None
-    ):
-
-        sx, sy = old_game_state["self"][3]
-        field = old_game_state["field"]
-
-        adjacent_crates = 0
-
-        for dx, dy in [
-            (-1, 0),
-            (1, 0),
-            (0, -1),
-            (0, 1)
-        ]:
-            nx = sx + dx
-            ny = sy + dy
-
-            if (
-                0 <= nx < 17
-                and 0 <= ny < 17
-                and field[nx, ny] == 1
-            ):
-                adjacent_crates += 1
-
-        reward += (
-            REWARD_BOMB_NEAR_CRATE
-            * adjacent_crates
-        )
-
-    if (
-        old_coin_distance is not None
-        and new_coin_distance is not None
-    ):
-
-        old_phi = (
-            -COIN_POTENTIAL_SCALE
-            * old_coin_distance
-        )
-
-        new_phi = (
-            -COIN_POTENTIAL_SCALE
-            * new_coin_distance
-        )
-
-        reward += (
-            GAMMA * new_phi
-            - old_phi
-        )
-
-    if (
-        old_danger is not None
-        and new_danger is not None
-        and old_game_state is not None
-        and new_game_state is not None
-    ):
-
-        ox, oy = old_game_state["self"][3]
-        nx, ny = new_game_state["self"][3]
-
-        old_danger_val = old_danger[ox, oy]
-        new_danger_val = new_danger[nx, ny]
-
-        if (
-            old_danger_val <= 1
-            and new_danger_val > 1
-        ):
-            reward += REWARD_ESCAPE_DANGER
-
-    return reward
-
-def game_events_occurred(
-    self,
-    old_game_state,
-    self_action,
-    new_game_state,
-    events
-):
-
-    if old_game_state is None or new_game_state is None:
+def game_events_occurred(self, old_game_state, self_action, new_game_state, events):
+    if old_game_state is None:
         return
 
+    # 1. Compute event-based reward
+    reward = 0.0
+    if "KILLED_OPPONENT" in events:
+        reward += REWARD_KILL
+    if "COIN_COLLECTED" in events:
+        reward += REWARD_COIN
+    if "CRATE_DESTROYED" in events:
+        reward += REWARD_CRATE
+    if self_action == "WAIT":
+        reward += REWARD_WAIT_PENALTY
+    if "KILLED_SELF" in events or "GOT_KILLED" in events:
+        reward -= 100.0
+
     if (
-        self.cached_features is not None
-        and self.cached_mask is not None
-        and self.cached_danger is not None
-        and self.cached_coin_distance is not None
+        new_game_state is not None
+        and old_game_state.get("others")
+        and new_game_state.get("others")
     ):
+        old_sx, old_sy = old_game_state["self"][3]
+        new_sx, new_sy = new_game_state["self"][3]
 
+        old_min_dist = min(
+            [
+                abs(old_sx - ox) + abs(old_sy - oy)
+                for _, _, _, (ox, oy) in old_game_state["others"]
+            ]
+        )
+        new_min_dist = min(
+            [
+                abs(new_sx - ox) + abs(new_sy - oy)
+                for _, _, _, (ox, oy) in new_game_state["others"]
+            ]
+        )
+
+        if new_min_dist < old_min_dist:
+            reward += REWARD_CLOSER_TO_OPPONENT
+        elif new_min_dist > old_min_dist:
+            reward -= REWARD_CLOSER_TO_OPPONENT
+
+    # 2. Features & Next Action Masking
+    # Bug fix: previously called prepare_state(new_game_state) and threw
+    # away its coin_distance with `_, _`, then never used
+    # self.cached_coin_distance (the old state's value) either -- so the
+    # BFS coin-distance computed every step never reached the reward.
+    # Now captured once here and used for potential-based shaping below,
+    # without calling prepare_state a second time.
+
+    if getattr(self, "cached_features", None) is not None:
         old_features = self.cached_features
-        old_mask = self.cached_mask
-        old_danger = self.cached_danger
-        old_coin_distance = self.cached_coin_distance
-
     else:
+        old_features, _, _, _ = prepare_state(old_game_state)
 
-        (
-            old_features,
-            old_mask,
-            old_danger,
-            old_coin_distance
-        ) = prepare_state(old_game_state)
+    old_coin_distance = getattr(self, "cached_coin_distance", None)
 
+    if new_game_state is not None:
+        new_features, next_mask, _, new_coin_distance = prepare_state(new_game_state)
+        is_terminal = False
+    else:
+        new_features = np.zeros((12, 17, 17), dtype=np.float32)
+        next_mask = np.zeros(6, dtype=np.float32)
+        new_coin_distance = None
+        is_terminal = True
 
-    (
-        new_features,
-        new_mask,
-        new_danger,
-        new_coin_distance
-    ) = prepare_state(new_game_state)
-
-
-    self.cached_features = new_features
-    self.cached_mask = new_mask
-    self.cached_danger = new_danger
-    self.cached_coin_distance = new_coin_distance
-
-
-    reward = calculate_reward(
-        self,
-        old_game_state,
-        new_game_state,
-        self_action,
-        events,
-        old_coin_distance=old_coin_distance,
-        new_coin_distance=new_coin_distance,
-        old_danger=old_danger,
-        new_danger=new_danger
+    # Potential-based coin shaping: F(s,s') = gamma*Phi(s') - Phi(s)
+    # (Ng, Harada & Russell 1999). Provably leaves the optimal policy
+    # unchanged while giving dense per-step signal toward the nearest
+    # coin, instead of relying purely on the sparse +8 pickup event.
+    reward += COIN_POTENTIAL_WEIGHT * (
+        GAMMA * _coin_potential(new_coin_distance)
+        - _coin_potential(old_coin_distance)
     )
 
-    action_idx = ACTIONS.index(self_action)
+    action_idx = (
+        ACTIONS.index(self_action)
+        if (self_action is not None and self_action in ACTIONS)
+        else 4
+    )
 
-    self.replay_buffer.append((
-        old_features,
-        action_idx,
-        reward,
-        new_features,
-        new_mask,
-        False
-    ))
+    # 3. Store transition in replay buffer
+    self.replay_buffer.push(
+        old_features, action_idx, reward, new_features, is_terminal, next_mask
+    )
 
-    self.episode_reward += reward
-    self.episode_steps += 1
+    # 4. Update step counter & decay epsilon
     self.steps_done += 1
+    self.epsilon = get_current_epsilon(self.steps_done)
 
-    update_epsilon(self)
-
-
-    loss = optimize_model(self)
-
-    if loss is not None:
-        self.loss_history.append(loss)
+    # 5. Optimize step
+    if self.steps_done % 4 == 0:
+        _optimize_model(self)
 
 
-def optimize_model(self):
+def end_of_round(self, last_game_state, last_action, events):
+    game_events_occurred(self, last_game_state, last_action, None, events)
 
+    # Save only the deployed evaluation weights (dqn_model.pt)
+    model_path = os.path.join(os.path.dirname(__file__), "dqn_model.pt")
+    torch.save(self.policy_net.state_dict(), model_path)
+
+
+def _optimize_model(self):
     if len(self.replay_buffer) < BATCH_SIZE:
-        return None
+        return
 
-    batch = random.sample(
-        self.replay_buffer,
-        BATCH_SIZE
+    states, actions, rewards, next_states, dones, next_masks = (
+        self.replay_buffer.sample(BATCH_SIZE)
     )
 
-    (
-        states,
-        actions,
-        rewards,
-        next_states,
-        next_masks,
-        dones
-    ) = zip(*batch)
+    states_t = torch.from_numpy(states).float().to(self.device)
+    actions_t = torch.from_numpy(actions).long().to(self.device).unsqueeze(1)
+    rewards_t = torch.from_numpy(rewards).float().to(self.device).unsqueeze(1)
+    next_states_t = torch.from_numpy(next_states).float().to(self.device)
+    dones_t = torch.from_numpy(dones).float().to(self.device).unsqueeze(1)
+    next_masks_t = torch.from_numpy(next_masks).float().to(self.device)
 
-    states_t = torch.as_tensor(
-        np.asarray(states),
-        dtype=torch.float32,
-        device=self.device
-    )
-
-    actions_t = torch.as_tensor(
-        actions,
-        dtype=torch.long,
-        device=self.device
-    ).unsqueeze(1)
-
-    rewards_t = torch.as_tensor(
-        rewards,
-        dtype=torch.float32,
-        device=self.device
-    )
-
-    next_states_t = torch.as_tensor(
-        np.asarray(next_states),
-        dtype=torch.float32,
-        device=self.device
-    )
-
-    next_masks_t = torch.as_tensor(
-        np.asarray(next_masks),
-        dtype=torch.bool,
-        device=self.device
-    )
-
-    dones_t = torch.as_tensor(
-        dones,
-        dtype=torch.float32,
-        device=self.device
-    )
-
-    current_q = (
-        self.policy_net(states_t)
-        .gather(1, actions_t)
-        .squeeze(1)
-    )
-
+    q_values = self.policy_net(states_t).gather(1, actions_t)
 
     with torch.no_grad():
+        next_q_policy = self.policy_net(next_states_t)
 
-        next_policy_q = self.policy_net(
-            next_states_t
-        )
+        masked_next_q = next_q_policy.clone()
+        masked_next_q[next_masks_t == 0.0] = -1e9
 
-        valid_action_exists = (
-            next_masks_t.any(
-                dim=1,
-                keepdim=True
-            )
-        )
+        best_actions = masked_next_q.argmax(dim=1, keepdim=True)
 
-        min_val = torch.finfo(next_policy_q.dtype).min
-        next_policy_q = next_policy_q.masked_fill(
-            ~next_masks_t,
-            min_val
-        )
+        next_q_target = self.target_net(next_states_t).gather(1, best_actions)
+        expected_q = rewards_t + (1.0 - dones_t) * GAMMA * next_q_target
 
-        best_next_actions = (
-            next_policy_q.argmax(
-                dim=1,
-                keepdim=True
-            )
-        )
-
-        next_target_q = (
-            self.target_net(next_states_t)
-            .gather(
-                1,
-                best_next_actions
-            )
-            .squeeze(1)
-        )
-
-        next_target_q = torch.where(
-            valid_action_exists.squeeze(1),
-            next_target_q,
-            torch.zeros_like(next_target_q)
-        )
-
-        bootstrap_valid = (
-            (1.0 - dones_t)
-            * valid_action_exists.squeeze(1).float()
-        )
-
-        target_q = (
-            rewards_t
-            +
-            bootstrap_valid
-            * GAMMA
-            * next_target_q
-        )
-
-    loss = F.smooth_l1_loss(
-        current_q,
-        target_q
-    )
+    loss = nn.SmoothL1Loss()(q_values, expected_q)
 
     self.optimizer.zero_grad()
-
     loss.backward()
-
-    torch.nn.utils.clip_grad_norm_(
-        self.policy_net.parameters(),
-        max_norm=1.0
-    )
-
+    nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
     self.optimizer.step()
 
     if self.steps_done % TARGET_UPDATE_FREQ == 0:
-        self.target_net.load_state_dict(
-            self.policy_net.state_dict()
-        )
-
-    return float(loss.item())
-
-    return float(loss.item())
-
-def end_of_round(
-    self,
-    last_game_state,
-    last_action,
-    events
-):
-
-    if last_game_state is None or last_action is None:
-        return
-
-    self.training_round += 1
-
-    if (
-        self.cached_features is not None
-        and self.cached_danger is not None
-        and self.cached_coin_distance is not None
-    ):
-
-        old_features = self.cached_features
-        old_danger = self.cached_danger
-        old_coin_distance = self.cached_coin_distance
-
-    else:
-
-        (
-            old_features,
-            _,
-            old_danger,
-            old_coin_distance
-        ) = prepare_state(last_game_state)
-
-    reward = calculate_reward(
-        self,
-        last_game_state,
-        None,
-        last_action,
-        events,
-        old_coin_distance=old_coin_distance,
-        new_coin_distance=None,
-        old_danger=old_danger,
-        new_danger=None
-    )
-
-    action_idx = ACTIONS.index(last_action)
-
-    terminal_state = np.zeros_like(
-        old_features
-    )
-
-    terminal_mask = np.zeros(
-        6,
-        dtype=np.bool_
-    )
-
-    self.replay_buffer.append((
-        old_features,
-        action_idx,
-        reward,
-        terminal_state,
-        terminal_mask,
-        True
-    ))
-
-    self.episode_reward += reward
-    self.episode_steps += 1
-    self.steps_done += 1
-
-    update_epsilon(self)
-
-    loss = optimize_model(self)
-
-    if loss is not None:
-        self.loss_history.append(loss)
-
-    self.recent_rewards.append(
-        self.episode_reward
-    )
-
-    self.recent_coins.append(
-        self.episode_coins
-    )
-
-    average_reward = float(
-        np.mean(self.recent_rewards)
-    )
-
-    average_coins = float(
-        np.mean(self.recent_coins)
-    )
-
-    average_loss = (
-        float(np.mean(self.loss_history))
-        if self.loss_history
-        else 0.0
-    )
-
-    model_dir = os.path.dirname(__file__)
-
-    final_model_path = os.path.join(
-        model_dir,
-        "dqn_model.pt"
-    )
-
-    should_save = (
-        self.training_round % SAVE_INTERVAL == 0
-        or self.training_round >= FINAL_TRAINING_ROUNDS
-    )
-
-    if should_save:
-
-        torch.save(
-            self.policy_net.state_dict(),
-            final_model_path
-        )
-
-        self.logger.info(
-            "MODEL SAVED | "
-            f"round={self.training_round} | "
-            f"path={final_model_path}"
-        )
-
-    with open(
-        self.log_path,
-        "a",
-        newline=""
-    ) as f:
-
-        writer = csv.writer(f)
-
-        writer.writerow([
-            self.training_round,
-            self.episode_steps,
-            round(self.episode_reward, 4),
-            round(average_reward, 4),
-            self.episode_coins,
-            round(average_coins, 4),
-            self.episode_kills,
-            self.episode_deaths,
-            self.episode_crates,
-            self.episode_invalid,
-            round(self.epsilon, 6),
-            round(average_loss, 6)
-        ])
-
-    if self.training_round % LOG_INTERVAL == 0:
-
-        self.logger.info(
-            "TRAIN | "
-            f"round={self.training_round} | "
-            f"reward={self.episode_reward:.2f} | "
-            f"avg_reward={average_reward:.2f} | "
-            f"coins={self.episode_coins} | "
-            f"avg_coins={average_coins:.2f} | "
-            f"kills={self.episode_kills} | "
-            f"deaths={self.episode_deaths} | "
-            f"crates={self.episode_crates} | "
-            f"invalid={self.episode_invalid} | "
-            f"epsilon={self.epsilon:.3f} | "
-            f"buffer={len(self.replay_buffer)} | "
-            f"loss={average_loss:.4f}"
-        )
-
-    self.cached_features = None
-    self.cached_mask = None
-    self.cached_danger = None
-    self.cached_coin_distance = None
-
-    self.episode_reward = 0.0
-    self.episode_coins = 0
-    self.episode_kills = 0
-    self.episode_deaths = 0
-    self.episode_crates = 0
-    self.episode_invalid = 0
-    self.episode_steps = 0
+        self.target_net.load_state_dict(self.policy_net.state_dict())
