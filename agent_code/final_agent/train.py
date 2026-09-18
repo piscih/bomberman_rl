@@ -18,11 +18,8 @@ from .callbacks import (
 from .dqn_model import DQNResNet
 
 
-# ============================================================
-# HYPERPARAMETERS
-# ============================================================
 
-BATCH_SIZE = 64
+BATCH_SIZE = 128
 
 GAMMA = 0.99
 
@@ -32,22 +29,12 @@ MEMORY_SIZE = 100_000
 
 TARGET_UPDATE_FREQ = 2500
 
-# ------------------------------------------------------------
-# Epsilon is now based on ENVIRONMENT STEPS rather than rounds.
-# ------------------------------------------------------------
-
 EPS_START = 1.0
 EPS_END = 0.05
-
 EPS_DECAY_STEPS = 100_000
-
-# Optimize every environment step.
-OPTIMIZE_EVERY = 1
+OPTIMIZE_EVERY = 8
 
 
-# ============================================================
-# REWARDS
-# ============================================================
 
 REWARD_KILL = 50.0
 
@@ -59,13 +46,9 @@ REWARD_WAIT_PENALTY = -0.1
 
 REWARD_DEATH = -100.0
 
-# Coin-directed potential.
 COIN_POTENTIAL_WEIGHT = 5.0
 
 
-# ============================================================
-# STATE / MODEL
-# ============================================================
 
 STATE_SHAPE = (
     12,
@@ -99,10 +82,6 @@ MODEL_PATH = os.path.join(
     "dqn_model.pt"
 )
 
-
-# ============================================================
-# CSV
-# ============================================================
 
 CSV_FIELDNAMES = [
     "round",
