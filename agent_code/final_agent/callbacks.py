@@ -192,10 +192,8 @@ def nearest_coin_distance(game_state, start_position=None):
     while queue:
         x, y = queue.popleft()
         current_distance = distance_map[x, y]
-
-        if (x, y) in coins:
+        if nearest_distance is None and (x, y) in coins:
             nearest_distance = int(current_distance)
-            break
 
         for dx, dy in DIRECTIONS:
             nx, ny = x + dx, y + dy
@@ -316,7 +314,19 @@ def setup(self):
         else:
             raise FileNotFoundError(f"Missing trained model for evaluation: {model_path}")
     else:
-        self.logger.info("Setup agent for training mode.")
+        # FIX/ADD: previously training always started from a randomly
+        # initialized network, even if a dqn_model.pt from an earlier
+        # (possibly interrupted) training run already existed. With a
+        # hard deadline you're likely to run training in more than one
+        # sitting, and you don't want a restart to throw away progress.
+        # If a checkpoint exists, warm-start from it; otherwise start
+        # fresh as before. Delete dqn_model.pt if you explicitly want a
+        # clean run from scratch.
+        if os.path.isfile(model_path):
+            self.policy_net.load_state_dict(torch.load(model_path, map_location=self.device))
+            self.logger.info("Resumed training from existing dqn_model.pt.")
+        else:
+            self.logger.info("No existing checkpoint found -- starting training from scratch.")
 
     self.policy_net.eval()
     self.cached_features = None
