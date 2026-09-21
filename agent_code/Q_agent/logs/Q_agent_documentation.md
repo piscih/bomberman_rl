@@ -735,38 +735,27 @@ The agent therefore focuses on information useful for decision-making rather tha
 ---
  
 
- # Three agents 
+ # Four agents 
 
- Tried building three agents by tuning the rewards
+ Tried building four agents by tuning the rewards:
 
  - Agent : 
  ``` 
  game_rewards = {
 
         e.COIN_COLLECTED: 100.0,
-
         e.CRATE_DESTROYED: 40.0,
-
         e.KILLED_OPPONENT: 200.0,
-
         e.KILLED_SELF: -800.0,
-
         e.GOT_KILLED: -500.0,
-
         e.INVALID_ACTION: -10.0,
 
         ESCAPED_DANGER: 20.0,
-
         MOVED_TOWARDS_TARGET: 5.0,
-
         PLACED_KILL_BOMB: 20.0,
-
         PLACED_HIGH_VALUE_BOMB: 15.0,
-
         PLACED_LOW_VALUE_BOMB: -10.0,
-
         USELESS_WAIT: -2.0,
-
         OSCILLATION_PENALTY: -20.0,
     }
 ```
@@ -793,29 +782,18 @@ The agent therefore focuses on information useful for decision-making rather tha
  game_rewards = {
 
         e.COIN_COLLECTED: 100.0,
-
         e.CRATE_DESTROYED: 40.0,
-
         e.KILLED_OPPONENT: 200.0,
-
         e.KILLED_SELF: -800.0,
-
         e.GOT_KILLED: -500.0,
-
         e.INVALID_ACTION: -10.0,
 
         ESCAPED_DANGER: 20.0,
-
         MOVED_TOWARDS_TARGET: 3.0,
-
         PLACED_KILL_BOMB: 60.0,
-
         PLACED_HIGH_VALUE_BOMB: 15.0,
-
         PLACED_LOW_VALUE_BOMB: -10.0,
-
         USELESS_WAIT: -2.0,
-
         OSCILLATION_PENALTY: -10.0,
     }
 ```    
@@ -843,29 +821,18 @@ The agent therefore focuses on information useful for decision-making rather tha
   game_rewards = {
 
     e.COIN_COLLECTED: 150.0,
-
     e.CRATE_DESTROYED: 30.0,
-
     e.KILLED_OPPONENT: 200.0,
-
     e.KILLED_SELF: -1000.0,
-
     e.GOT_KILLED: -600.0,
-
     e.INVALID_ACTION: -10.0,
 
     ESCAPED_DANGER: 20.0,
-
     MOVED_TOWARDS_TARGET: 5.0,
-
     PLACED_KILL_BOMB: 40.0,
-
     PLACED_HIGH_VALUE_BOMB: 10.0,
-
     PLACED_LOW_VALUE_BOMB: -10.0,
-
     USELESS_WAIT: -2.0,
-
     OSCILLATION_PENALTY: -10.0,
 }
 ```
@@ -885,3 +852,67 @@ The agent therefore focuses on information useful for decision-making rather tha
             "time": 34.575828313827515
         }
 ```
+- Agent3 (best found reward shaping) : (trained with 10.000 rounds)
+Added a few new rewards for better results (e.g. MOVED_UP).
+```
+e.COIN_COLLECTED: 400.0,
+    e.CRATE_DESTROYED: 200.0,
+    e.KILLED_OPPONENT: 700.0,
+    e.KILLED_SELF: -1000.0,
+    e.GOT_KILLED: -600.0,
+    e.INVALID_ACTION: -50.0,
+    e.MOVED_DOWN: -1.0,
+    e.MOVED_UP: -1.0,
+    e.MOVED_LEFT: -1.0,
+    e.MOVED_RIGHT: -1.0,
+    e.WAITED: -1.0,
+
+    MOVED_TOWARDS_TARGET: 5.0,
+    ESCAPED_DANGER: 20.0,
+    PLACED_KILL_BOMB: 200.0,
+    PLACED_HIGH_VALUE_BOMB: 30.0,
+    PLACED_LOW_VALUE_BOMB: -5.0,
+    USELESS_WAIT: -10.0,
+    OSCILLATION_PENALTY: -30.0,
+```
+- Agent3 stats:
+```
+"Q_agent": {
+            "bombs": 25642,
+            "coins": 1254,
+            "crates": 21417,
+            "invalid": 1103,
+            "kills": 182,
+            "moves": 163981,
+            "rounds": 1000,
+            "score": 2164,
+            "steps": 236869,
+            "suicides": 438,
+            "time": 77.58330965042114
+        },
+```
+It still needs to collect more coins compared to the rule_based_agent.
+
+# Reward Shaping
+
+## Why does the agent need Reward Shaping?
+
+In the standard Bomberman environment, the agent receives few rewards. They gain points by collecting coins or killing opponents. For a Q-learning agent that only explores and does not exploit, the probability of executing a more complex kill is extremely small. Without adjusting the reward system, the agent receives little useful feedback, causing the Q-learning algorithm to converge inefficiently and slowly.
+
+## How did we implement the reward shaping?
+
+To increase the agent’s learning efficiency, the concept of reward shaping was used. In this approach, artificial intermediate rewards are created that provide the agent with a reward at time step t+1. This adjusted reward is calculated as the sum of the environment’s standard rewards and the user-defined intermediate rewards.
+
+This continuously provides the agent with incentives that gradually lead it toward more complex behavior. For this reason, various events were defined. For example, the agent receives a small positive reward via the ‘MOVED_TOWARDS_TARGET’ event when it reduces the Manhattan distance to a coin. Similarly, the ‘ESCAPED_DANGER’ event encourages defensive behavior as soon as the agent actively leaves the lethal radius of a bomb placed by an opponent.
+
+## Which problems (exploits) did we have to solve?
+
+The primary challenge in implementing reward shaping is the so-called alignment problem. In this case, the agent mathematically optimizes the reward function but this does not necessarily lead to the desired gameplay behavior. For example, during the training phase, the agent systematically exploited 'gaps' in the scaling of rewards:
+
+1. Suicide Exploit: If the penalty for suicide ('KILLED_SELF') is mathematically lower than the penalty for being killed by an opponent ('GOT_KILLED'), the agent learns to preemptively kill itself when danger is imminent, so that the loss of points remains as low as possible. Therefore, suicide must be defined as the absolute worst-case scenario.
+
+2. Oscillation: If the reward for approaching a target is greater than the cost of a single move, the agent decides to oscillate back and forth in front of a coin so that approach points are generated an infinite number of times.
+
+3. Cost-Benefit Discrepancy: Illegal moves, e.g., into walls ('INVALID_ACTIONS'), must be directly proportional to the reward for obtaining a coin. If these illegal moves are not penalized sufficiently, the agent will ignore the penalty and repeatedly run into obstacles as long as the subsequent gain from the coin offsets the loss.
+
+To prevent this behavior from occurring, the reward values were logically increased or decreased until the best possible score was achieved. The reward for approaching a coin was calibrated to be positive, while collecting the target remained even more lucrative. Repetitive loops are penalized by an explicit ‘OSCILLATION_PENALTY’, and the ratios between illegal moves and target rewards are adjusted so that poor behavior results in a negative overall outcome.

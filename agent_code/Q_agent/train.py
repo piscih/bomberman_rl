@@ -55,31 +55,25 @@ def reward_from_events(
 
     game_rewards = {
 
-    e.COIN_COLLECTED: 150.0,
-
-    e.CRATE_DESTROYED: 30.0,
-
-    e.KILLED_OPPONENT: 200.0,
-
+    e.COIN_COLLECTED: 400.0,
+    e.CRATE_DESTROYED: 200.0,
+    e.KILLED_OPPONENT: 700.0,
     e.KILLED_SELF: -1000.0,
-
     e.GOT_KILLED: -600.0,
-
-    e.INVALID_ACTION: -10.0,
-
-    ESCAPED_DANGER: 20.0,
+    e.INVALID_ACTION: -50.0,
+    e.MOVED_DOWN: -1.0,
+    e.MOVED_UP: -1.0,
+    e.MOVED_LEFT: -1.0,
+    e.MOVED_RIGHT: -1.0,
+    e.WAITED: -1.0,
 
     MOVED_TOWARDS_TARGET: 5.0,
-
-    PLACED_KILL_BOMB: 40.0,
-
-    PLACED_HIGH_VALUE_BOMB: 10.0,
-
-    PLACED_LOW_VALUE_BOMB: -10.0,
-
-    USELESS_WAIT: -2.0,
-
-    OSCILLATION_PENALTY: -10.0,
+    ESCAPED_DANGER: 20.0,
+    PLACED_KILL_BOMB: 200.0,
+    PLACED_HIGH_VALUE_BOMB: 30.0,
+    PLACED_LOW_VALUE_BOMB: -5.0,
+    USELESS_WAIT: -10.0,
+    OSCILLATION_PENALTY: -30.0,
 }
 
     return sum(
