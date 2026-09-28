@@ -113,3 +113,5 @@ replays/
 
 agent_code/dqn_agent/dqn_model.pt
 agent_code/dqn_agent/train_checkpoint.ptagent_code/DDQN_V2A/dqn_model.pt
+agent_code/DDQN_V2A/dqn_model.pt
+agent_code/DDQN_V2B/dqn_model.pt
