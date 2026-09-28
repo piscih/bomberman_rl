@@ -1,6 +1,0 @@
- __pycache__/
-logs/
-*.pt
-*.pkl
-*-Hyperparams.prm
-.training-stage-start.*
